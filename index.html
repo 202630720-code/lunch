@@ -1,0 +1,277 @@
+import zipfile
+import os
+
+# Create scripts folder structure
+scripts = {
+    "PlayerMovement.cs": '''using UnityEngine;
+
+public class PlayerMovement : MonoBehaviour
+{
+    public CharacterController controller;
+    public Transform playerCamera;
+
+    public float speed = 12f;
+    public float mouseSensitivity = 100f;
+    public float gravity = -9.81f;
+
+    private float xRotation = 0f;
+    private Vector3 velocity;
+
+    void Start()
+    {
+        Cursor.lockState = CursorLockMode.Locked;
+    }
+
+    void Update()
+    {
+        float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity * Time.deltaTime;
+        float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity * Time.deltaTime;
+
+        xRotation -= mouseY;
+        xRotation = Mathf.Clamp(xRotation, -90f, 90f);
+
+        playerCamera.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
+        transform.Rotate(Vector3.up * mouseX);
+
+        float x = Input.GetAxis("Horizontal");
+        float z = Input.GetAxis("Vertical");
+
+        Vector3 move = transform.right * x + transform.forward * z;
+        controller.Move(move * speed * Time.deltaTime);
+
+        velocity.y += gravity * Time.deltaTime;
+        controller.Move(velocity * Time.deltaTime);
+    }
+}
+''',
+    "WeaponSwitching.cs": '''using UnityEngine;
+
+public class WeaponSwitching : MonoBehaviour
+{
+    public int selectedWeapon = 0; // 0: Gun, 1: Lightsaber
+
+    void Start()
+    {
+        SelectWeapon();
+    }
+
+    void Update()
+    {
+        int previousSelectedWeapon = selectedWeapon;
+
+        if (Input.GetKeyDown(KeyCode.Q))
+        {
+            selectedWeapon = (selectedWeapon == 0) ? 1 : 0;
+        }
+
+        if (Input.GetKeyDown(KeyCode.Alpha1)) selectedWeapon = 0;
+        if (Input.GetKeyDown(KeyCode.Alpha2)) selectedWeapon = 1;
+
+        if (previousSelectedWeapon != selectedWeapon)
+        {
+            SelectWeapon();
+        }
+    }
+
+    void SelectWeapon()
+    {
+        int i = 0;
+        foreach (Transform weapon in transform)
+        {
+            if (i == selectedWeapon)
+                weapon.gameObject.SetActive(true);
+            else
+                weapon.gameObject.SetActive(false);
+
+            i++;
+        }
+    }
+}
+''',
+    "Gun.cs": '''using UnityEngine;
+
+public class Gun : MonoBehaviour
+{
+    [Header("Gun Settings")]
+    public float damage = 10f;
+    public float range = 100f;
+    public Camera fpsCam;
+
+    [Header("Visual Effects")]
+    public ParticleSystem muzzleFlash;
+    public GameObject impactEffect;
+    public float impactForce = 30f;
+
+    void Update()
+    {
+        if (Input.GetButtonDown("Fire1"))
+        {
+            Shoot();
+        }
+    }
+
+    void Shoot()
+    {
+        if (muzzleFlash != null) muzzleFlash.Play();
+
+        RaycastHit hit;
+        if (Physics.Raycast(fpsCam.transform.position, fpsCam.transform.forward, out hit, range))
+        {
+            Target target = hit.transform.GetComponent<Target>();
+            if (target != null)
+            {
+                target.TakeDamage(damage);
+            }
+
+            if (hit.rigidbody != null)
+            {
+                hit.rigidbody.AddForce(-hit.normal * impactForce);
+            }
+
+            if (impactEffect != null)
+            {
+                GameObject impactGO = Instantiate(impactEffect, hit.point, Quaternion.LookRotation(hit.normal));
+                Destroy(impactGO, 2f);
+            }
+        }
+    }
+}
+''',
+    "LightsaberAudio.cs": '''using UnityEngine;
+
+public class LightsaberAudio : MonoBehaviour
+{
+    [Header("Audio Sources")]
+    public AudioSource sfxSource;   // Loop: Off
+    public AudioSource humSource;   // Loop: On
+
+    [Header("Audio Clips")]
+    public AudioClip soundOn;
+    public AudioClip soundOff;
+    public AudioClip soundHum;
+    public AudioClip[] soundSwings;
+
+    private bool isOn = false;
+
+    void OnEnable() => TurnOn();
+    void OnDisable() => TurnOff();
+
+    public void TurnOn()
+    {
+        isOn = true;
+        if (soundOn != null && sfxSource != null) sfxSource.PlayOneShot(soundOn);
+        if (soundHum != null && humSource != null)
+        {
+            humSource.clip = soundHum;
+            humSource.Play();
+        }
+    }
+
+    public void TurnOff()
+    {
+        isOn = false;
+        if (soundOff != null && sfxSource != null) sfxSource.PlayOneShot(soundOff);
+        if (humSource != null) humSource.Stop();
+    }
+
+    public void PlaySwingSound()
+    {
+        if (!isOn || soundSwings == null || soundSwings.Length == 0) return;
+        int randomIndex = Random.Range(0, soundSwings.Length);
+        if (sfxSource != null) sfxSource.PlayOneShot(soundSwings[randomIndex]);
+    }
+}
+''',
+    "Lightsaber.cs": '''using UnityEngine;
+
+public class Lightsaber : MonoBehaviour
+{
+    public float damage = 50f;
+    public Animator animator;
+    public Collider saberCollider;
+    public TrailRenderer saberTrail;
+    public LightsaberAudio saberAudio;
+
+    private bool isAttacking = false;
+
+    void Start()
+    {
+        if (saberCollider != null) saberCollider.enabled = false;
+        if (saberTrail != null)
+        {
+            saberTrail.emitting = false;
+            saberTrail.Clear();
+        }
+    }
+
+    void Update()
+    {
+        if (Input.GetButtonDown("Fire1") && !isAttacking)
+        {
+            Attack();
+        }
+    }
+
+    void Attack()
+    {
+        isAttacking = true;
+
+        if (animator != null) animator.SetTrigger("Swing");
+        if (saberAudio != null) saberAudio.PlaySwingSound();
+
+        if (saberTrail != null)
+        {
+            saberTrail.Clear();
+            saberTrail.emitting = true;
+        }
+
+        Invoke(nameof(EnableCollider), 0.1f);
+        Invoke(nameof(ResetAttack), 0.4f);
+    }
+
+    void EnableCollider()
+    {
+        if (saberCollider != null) saberCollider.enabled = true;
+    }
+
+    void ResetAttack()
+    {
+        if (saberCollider != null) saberCollider.enabled = false;
+        if (saberTrail != null) saberTrail.emitting = false;
+        isAttacking = false;
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        Target target = other.GetComponent<Target>();
+        if (target != null)
+        {
+            target.TakeDamage(damage);
+        }
+    }
+}
+''',
+    "Target.cs": '''using UnityEngine;
+
+public class Target : MonoBehaviour
+{
+    public float health = 50f;
+
+    public void TakeDamage(float amount)
+    {
+        health -= amount;
+        if (health <= 0f)
+        {
+            Destroy(gameObject);
+        }
+    }
+}
+'''
+}
+
+zip_filename = "Unity_FPS_Lightsaber_Scripts.zip"
+with zipfile.ZipFile(zip_filename, "w") as zf:
+    for name, content in scripts.items():
+        zf.writestr(f"Scripts/{name}", content)
+
+print(f"ZIP File created: {zip_filename}")
